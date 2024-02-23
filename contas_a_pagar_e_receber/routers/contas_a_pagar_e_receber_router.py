@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import List
@@ -20,7 +21,10 @@ class ContasPagarReceberResponse(BaseModel):
     descricao: str
     valor: float
     tipo: str
-    fornecedor : FornecedorClienteResponse | None = None
+    fornecedor: FornecedorClienteResponse | None = None
+    data_baixa : datetime | None = None
+    valor_baixa : Decimal | None = None
+    esta_baixada : bool | None = None
 
     class Config:
         orm_mode = True
@@ -46,7 +50,7 @@ def listar_contas(db: Session = Depends(get_db)) -> List[ContasPagarReceberRespo
 @router.get('/{id_conta}', response_model=ContasPagarReceberResponse)
 def listar_conta(id_conta: int,
                  db: Session = Depends(get_db)) -> List[ContasPagarReceberResponse]:
-    conta_a_pagar_receber: ContaPagarReceber = busca_conta_por_id(id_conta,db)
+    conta_a_pagar_receber: ContaPagarReceber = busca_conta_por_id(id_conta, db)
     return conta_a_pagar_receber
 
 
@@ -66,16 +70,12 @@ def criar_conta(conta: ContasPagarReceberRequest, db: Session = Depends(get_db))
     return contas_a_pagar_e_receber
 
 
-
-
-
 @router.put('/{id}', response_model=ContasPagarReceberResponse, status_code=200)
 def atualizar_conta(id: int,
                     conta: ContasPagarReceberRequest, db: Session = Depends(get_db)):
-
     valida_fornecedor(conta.fornecedor_cliente_id, db)
 
-    conta_atualizada = busca_conta_por_id(id,db)
+    conta_atualizada = busca_conta_por_id(id, db)
     conta_atualizada.descricao = conta.descricao
     conta_atualizada.valor = conta.valor
     conta_atualizada.tipo = conta.tipo
@@ -87,20 +87,41 @@ def atualizar_conta(id: int,
     return conta_atualizada
 
 
+@router.post('/{id}/baixar', response_model=ContasPagarReceberResponse, status_code=200)
+def baixar_conta(id: int,
+                 db: Session = Depends(get_db)):
+
+    conta_atualizada = busca_conta_por_id(id, db)
+
+    if (conta_atualizada.esta_baixada and conta_atualizada.valor != conta_atualizada.valor_baixa):
+        return conta_atualizada
+
+    conta_atualizada.data_baixa = datetime.now()
+    conta_atualizada.esta_baixada = True
+    conta_atualizada.valor_baixa = conta_atualizada.valor
+
+    db.add(conta_atualizada)
+    db.commit()
+    db.refresh(conta_atualizada)
+
+    return conta_atualizada
+
+
 @router.delete('/{id}', status_code=204)
 def delete_conta(id: int, db: Session = Depends(get_db)):
-    contas_a_pagar_e_receber = busca_conta_por_id(id,db)
+    contas_a_pagar_e_receber = busca_conta_por_id(id, db)
     db.delete(contas_a_pagar_e_receber)
     db.commit()
 
 
-def busca_conta_por_id(id_da_conta_a_pagar_e_receber:int, db:Session) -> ContaPagarReceber:
+def busca_conta_por_id(id_da_conta_a_pagar_e_receber: int, db: Session) -> ContaPagarReceber:
     conta_a_pagar_e_receber = db.query(ContaPagarReceber).get(id_da_conta_a_pagar_e_receber)
 
     if not conta_a_pagar_e_receber:
         raise NotFound("Conta")
 
     return conta_a_pagar_e_receber
+
 
 def valida_fornecedor(fornecedor_cliente_id, db):
     if fornecedor_cliente_id is not None:
