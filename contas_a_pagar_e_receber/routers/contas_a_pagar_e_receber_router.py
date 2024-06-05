@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 from enum import Enum
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import extract
 from sqlalchemy.orm import Session
 
 from contas_a_pagar_e_receber.models.conta_a_pagar_receber_model import ContaPagarReceber
@@ -16,13 +17,16 @@ from shared.exceptions import NotFound
 router = APIRouter(prefix="/contas-a-pagar-e-receber")
 
 
+QUANTIDADE_PERMITIDA_POR_MES = 100
+
 class ContasPagarReceberResponse(BaseModel):
     id: int
     descricao: str
     valor: float
     tipo: str
+    data_previsao : date | None = None
     fornecedor: FornecedorClienteResponse | None = None
-    data_baixa : datetime | None = None
+    data_baixa : date | None = None
     valor_baixa : Decimal | None = None
     esta_baixada : bool | None = None
 
@@ -40,6 +44,7 @@ class ContasPagarReceberRequest(BaseModel):
     valor: Decimal = Field(gt=0)
     tipo: ContaPagarReceberTipoEnum
     fornecedor_cliente_id: int | None = None
+    data_previsao : date
 
 
 @router.get('/', response_model=List[ContasPagarReceberResponse])
@@ -57,6 +62,8 @@ def listar_conta(id_conta: int,
 @router.post('/', response_model=ContasPagarReceberResponse, status_code=201)
 def criar_conta(conta: ContasPagarReceberRequest, db: Session = Depends(get_db)) -> ContasPagarReceberResponse:
     valida_fornecedor(conta.fornecedor_cliente_id, db)
+
+    valida_se_pode_registrar_novas_contas(conta,db)
 
     contas_a_pagar_e_receber = ContaPagarReceber(descricao=conta.descricao,
                                                  valor=conta.valor,
@@ -96,7 +103,7 @@ def baixar_conta(id: int,
     if (conta_atualizada.esta_baixada and conta_atualizada.valor != conta_atualizada.valor_baixa):
         return conta_atualizada
 
-    conta_atualizada.data_baixa = datetime.now()
+    conta_atualizada.data_baixa = date.today()
     conta_atualizada.esta_baixada = True
     conta_atualizada.valor_baixa = conta_atualizada.valor
 
@@ -128,3 +135,21 @@ def valida_fornecedor(fornecedor_cliente_id, db):
         contas_a_pagar_e_receber = db.query(FornecedorCliente).get(fornecedor_cliente_id)
         if contas_a_pagar_e_receber is None:
             raise HTTPException(status_code=422, detail="Fornecedor Cliente não encontrado")
+
+def valida_se_pode_registrar_novas_contas(conta_a_pagar_e_receber_request:ContasPagarReceberRequest, db) -> None:
+    if recupera_numero_registros(db,
+                                 conta_a_pagar_e_receber_request.data_previsao.year,
+                                 conta_a_pagar_e_receber_request.data_previsao.month) > QUANTIDADE_PERMITIDA_POR_MES:
+        raise HTTPException(status_code=422, detail="Não é possível registrar mais de 100 contas por mês")
+
+
+def recupera_numero_registros(db,ano,mes) -> int:
+
+    quantidade_de_registros = db.query(ContaPagarReceber).filter(
+        extract('year', ContaPagarReceber.data_baixa) == ano
+    ).filter(
+        extract('month', ContaPagarReceber.data_baixa) == mes
+    ).count()
+
+    return quantidade_de_registros
+
